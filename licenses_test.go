@@ -150,6 +150,7 @@ func TestNoBuildableGoSourceFiles(t *testing.T) {
 	if err == nil {
 		t.Fatal("no error on missing package")
 	}
+	fmt.Println(err)
 	if _, ok := err.(*MissingError); !ok {
 		t.Fatalf("MissingError expected")
 	}
@@ -195,7 +196,7 @@ func TestCleanLicenseData(t *testing.T) {
 	data := `The MIT License (MIT)
 
 	Copyright (c) 2013 Ben Johnson
-	
+
 	Some other lines.
 	And more.
 	`

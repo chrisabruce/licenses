@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"encoding/csv"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -17,6 +18,8 @@ import (
 
 	"github.com/pmezard/licenses/assets"
 )
+
+const Confidence = 0.9
 
 type Template struct {
 	Title    string
@@ -384,6 +387,29 @@ type License struct {
 	MissingWords []string
 }
 
+func (l *License) Name(useUnknown bool) string {
+	license := "?"
+	if l.Template != nil {
+		if l.Score > .99 {
+			license = fmt.Sprintf("%s", l.Template.Title)
+		} else if l.Score >= Confidence {
+			license = fmt.Sprintf("%s (%2d%%)", l.Template.Title, int(100*l.Score))
+			if useUnknown && len(l.ExtraWords) > 0 {
+				license += "\n\t+words: " + strings.Join(l.ExtraWords, ", ")
+			}
+			if useUnknown && len(l.MissingWords) > 0 {
+				license += "\n\t-words: " + strings.Join(l.MissingWords, ", ")
+			}
+		} else {
+			license = fmt.Sprintf("? (%s, %2d%%)", l.Template.Title, int(100*l.Score))
+		}
+	} else if l.Err != "" {
+		license = strings.Replace(l.Err, "\n", " ", -1)
+	}
+
+	return license
+}
+
 func listLicenses(gopath string, pkgs []string) ([]License, error) {
 	templates, err := loadTemplates()
 	if err != nil {
@@ -535,7 +561,7 @@ func groupLicenses(licenses []License) ([]License, error) {
 
 func printLicenses() error {
 	flag.Usage = func() {
-		fmt.Println(`Usage: licenses IMPORTPATH...
+		fmt.Printf(`Usage: licenses IMPORTPATH...
 
 licenses lists all dependencies of specified packages or commands, excluding
 standard library packages, and prints their licenses. Licenses are detected by
@@ -548,18 +574,19 @@ With -a, all individual packages are displayed instead of grouping them by
 license files.
 With -w, words in package license file not found in the template license are
 displayed. It helps assessing the changes importance.
+With -o [tabs|csv], output is in tab format or csv format.  Defaults to tabs.
 `)
 		os.Exit(1)
 	}
 	all := flag.Bool("a", false, "display all individual packages")
 	words := flag.Bool("w", false, "display words not matching license template")
+	out := flag.String("o", "tabs", "output in tabs or csv")
 	flag.Parse()
 	if flag.NArg() < 1 {
 		return fmt.Errorf("expect at least one package argument")
 	}
 	pkgs := flag.Args()
 
-	confidence := 0.9
 	licenses, err := listLicenses("", pkgs)
 	if err != nil {
 		return err
@@ -570,27 +597,33 @@ displayed. It helps assessing the changes importance.
 			return err
 		}
 	}
+
+	switch *out {
+
+	case "csv":
+		return printUsingCSV(licenses, *words)
+	default:
+		return printUsingTabs(licenses, *words)
+	}
+
+}
+
+func printUsingCSV(licenses []License, showUnknownNames bool) error {
+	w := csv.NewWriter(os.Stdout)
+	for _, l := range licenses {
+		err := w.Write([]string{l.Package, l.Name(showUnknownNames)})
+		if err != nil {
+			return err
+		}
+	}
+	w.Flush()
+	return w.Error()
+}
+
+func printUsingTabs(licenses []License, showUnknownNames bool) error {
 	w := tabwriter.NewWriter(os.Stdout, 1, 4, 2, ' ', 0)
 	for _, l := range licenses {
-		license := "?"
-		if l.Template != nil {
-			if l.Score > .99 {
-				license = fmt.Sprintf("%s", l.Template.Title)
-			} else if l.Score >= confidence {
-				license = fmt.Sprintf("%s (%2d%%)", l.Template.Title, int(100*l.Score))
-				if *words && len(l.ExtraWords) > 0 {
-					license += "\n\t+words: " + strings.Join(l.ExtraWords, ", ")
-				}
-				if *words && len(l.MissingWords) > 0 {
-					license += "\n\t-words: " + strings.Join(l.MissingWords, ", ")
-				}
-			} else {
-				license = fmt.Sprintf("? (%s, %2d%%)", l.Template.Title, int(100*l.Score))
-			}
-		} else if l.Err != "" {
-			license = strings.Replace(l.Err, "\n", " ", -1)
-		}
-		_, err = w.Write([]byte(l.Package + "\t" + license + "\n"))
+		_, err := w.Write([]byte(l.Package + "\t" + l.Name(showUnknownNames) + "\n"))
 		if err != nil {
 			return err
 		}
